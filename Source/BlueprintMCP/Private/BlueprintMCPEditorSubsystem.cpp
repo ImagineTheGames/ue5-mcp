@@ -2,6 +2,39 @@
 #include "BlueprintMCPServer.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Misc/Parse.h"
+#include "HAL/PlatformMisc.h"
+
+namespace
+{
+	// Resolve port from (in order):
+	//   1) -BlueprintMCPPort=NNNN command line arg
+	//   2) UE_BLUEPRINT_MCP_PORT env var (project-specific override)
+	//   3) UE_PORT env var (matches the BlueprintMCP TS server's convention)
+	//   4) Default 9847
+	// Lets PBW + SchoolsOut editors run side-by-side on different ports.
+	int32 ResolveBlueprintMCPPort()
+	{
+		int32 CmdPort = 0;
+		if (FParse::Value(FCommandLine::Get(), TEXT("BlueprintMCPPort="), CmdPort) && CmdPort > 0)
+		{
+			return CmdPort;
+		}
+		const FString EnvSpecific = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_BLUEPRINT_MCP_PORT"));
+		if (!EnvSpecific.IsEmpty())
+		{
+			const int32 EnvPort = FCString::Atoi(*EnvSpecific);
+			if (EnvPort > 0) return EnvPort;
+		}
+		const FString EnvGeneric = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_PORT"));
+		if (!EnvGeneric.IsEmpty())
+		{
+			const int32 EnvPort = FCString::Atoi(*EnvGeneric);
+			if (EnvPort > 0) return EnvPort;
+		}
+		return 9847;
+	}
+}
 
 void UBlueprintMCPEditorSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -13,8 +46,10 @@ void UBlueprintMCPEditorSubsystem::Initialize(FSubsystemCollectionBase& Collecti
 		return;
 	}
 
+	const int32 ResolvedPort = ResolveBlueprintMCPPort();
+
 	Server = MakeUnique<FBlueprintMCPServer>();
-	if (Server->Start(9847, /*bEditorMode=*/true))
+	if (Server->Start(ResolvedPort, /*bEditorMode=*/true))
 	{
 		UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: Editor subsystem started — MCP server on port %d"), Server->GetPort());
 
@@ -32,7 +67,7 @@ void UBlueprintMCPEditorSubsystem::Initialize(FSubsystemCollectionBase& Collecti
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("BlueprintMCP: Editor subsystem failed to start MCP server (port may be in use)"));
+		UE_LOG(LogTemp, Warning, TEXT("BlueprintMCP: Editor subsystem failed to start MCP server on port %d (port may be in use)"), ResolvedPort);
 		Server.Reset();
 	}
 }
