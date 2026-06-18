@@ -107,6 +107,10 @@ private:
 	using FRequestHandler = TFunction<FString(const TMap<FString, FString>&, const FString&)>;
 	TMap<FString, FRequestHandler> HandlerMap;
 	TSet<FString> MutationEndpoints;
+	/** Widget Blueprint mutation endpoints — excluded from undo transactions to
+	 *  avoid the REINST_/World-Leak crash (see ProcessOneRequest). They rely on
+	 *  snapshot/restore for undo instead. */
+	TSet<FString> WidgetMutationEndpoints;
 	void RegisterHandlers();
 	// ----- Queued request model -----
 	struct FPendingRequest

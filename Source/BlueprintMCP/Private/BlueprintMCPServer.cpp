@@ -836,6 +836,22 @@ bool FBlueprintMCPServer::Start(int32 InPort, bool bEditorMode)
 	Router->BindRoute(FHttpPath(TEXT("/api/is-pie-running")), EHttpServerRequestVerbs::VERB_POST,
 		QueuedHandler(TEXT("isPieRunning")));
 
+	// Widget Blueprint tools
+	Router->BindRoute(FHttpPath(TEXT("/api/list-widget-tree")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("listWidgetTree")));
+	Router->BindRoute(FHttpPath(TEXT("/api/get-widget-properties")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("getWidgetProperties")));
+	Router->BindRoute(FHttpPath(TEXT("/api/add-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("addWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/remove-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("removeWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/set-widget-property")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("setWidgetProperty")));
+	Router->BindRoute(FHttpPath(TEXT("/api/move-widget")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("moveWidget")));
+	Router->BindRoute(FHttpPath(TEXT("/api/create-widget-blueprint")), EHttpServerRequestVerbs::VERB_POST,
+		QueuedHandler(TEXT("createWidgetBlueprint")));
+
 	// Register TMap dispatch handlers
 	RegisterHandlers();
 
@@ -899,16 +915,22 @@ bool FBlueprintMCPServer::ProcessOneRequest()
 	FString Response;
 	if (FRequestHandler* Handler = HandlerMap.Find(Req->Endpoint))
 	{
-		// Wrap mutation endpoints in an undo transaction so users can Ctrl+Z
+		// Wrap mutation endpoints in an undo transaction so users can Ctrl+Z.
+		// Widget Blueprint mutations are EXCLUDED: BP recompilation creates REINST_
+		// objects whose WidgetTree references get trapped in the TransBuffer, which
+		// blocks GC of the old World (fatal "World Leak" crash in
+		// ReferenceChainSearch.cpp). Widget tools use snapshot/restore for undo.
 		const bool bIsMutation = MutationEndpoints.Contains(Req->Endpoint);
-		if (bIsMutation && GEditor)
+		const bool bIsWidgetMutation = WidgetMutationEndpoints.Contains(Req->Endpoint);
+		const bool bUseTransaction = bIsMutation && !bIsWidgetMutation && GEditor != nullptr;
+		if (bUseTransaction)
 		{
 			GEditor->BeginTransaction(FText::FromString(FString::Printf(TEXT("BlueprintMCP: %s"), *Req->Endpoint)));
 		}
 
 		Response = (*Handler)(Req->QueryParams, Req->Body);
 
-		if (bIsMutation && GEditor)
+		if (bUseTransaction)
 		{
 			GEditor->EndTransaction();
 		}
@@ -995,6 +1017,24 @@ void FBlueprintMCPServer::RegisterHandlers()
 		TEXT("removeSkeletonSocket"),
 		TEXT("copySkeletonSockets"),
 		TEXT("rebuildGroomBindings"),
+		// Widget Blueprint mutations (excluded from transactions below).
+		TEXT("addWidget"),
+		TEXT("removeWidget"),
+		TEXT("setWidgetProperty"),
+		TEXT("moveWidget"),
+		TEXT("createWidgetBlueprint"),
+	};
+
+	// Widget Blueprint mutations must NOT be wrapped in an undo transaction
+	// (REINST_/World-Leak crash — see ProcessOneRequest). Tracked separately so
+	// ProcessOneRequest can skip the transaction while still treating them as
+	// mutations.
+	WidgetMutationEndpoints = {
+		TEXT("addWidget"),
+		TEXT("removeWidget"),
+		TEXT("setWidgetProperty"),
+		TEXT("moveWidget"),
+		TEXT("createWidgetBlueprint"),
 	};
 
 	// GET handlers (use QueryParams, ignore Body)
@@ -1128,6 +1168,15 @@ void FBlueprintMCPServer::RegisterHandlers()
 	HandlerMap.Add(TEXT("startPie"),                [this](const TMap<FString, FString>&, const FString& B) { return HandleStartPIE(B); });
 	HandlerMap.Add(TEXT("stopPie"),                 [this](const TMap<FString, FString>&, const FString& B) { return HandleStopPIE(B); });
 	HandlerMap.Add(TEXT("isPieRunning"),            [this](const TMap<FString, FString>&, const FString& B) { return HandleIsPIERunning(B); });
+
+	// Widget Blueprint tools
+	HandlerMap.Add(TEXT("listWidgetTree"),       [this](const TMap<FString, FString>&, const FString& B) { return HandleListWidgetTree(B); });
+	HandlerMap.Add(TEXT("getWidgetProperties"),  [this](const TMap<FString, FString>&, const FString& B) { return HandleGetWidgetProperties(B); });
+	HandlerMap.Add(TEXT("addWidget"),            [this](const TMap<FString, FString>&, const FString& B) { return HandleAddWidget(B); });
+	HandlerMap.Add(TEXT("removeWidget"),         [this](const TMap<FString, FString>&, const FString& B) { return HandleRemoveWidget(B); });
+	HandlerMap.Add(TEXT("setWidgetProperty"),    [this](const TMap<FString, FString>&, const FString& B) { return HandleSetWidgetProperty(B); });
+	HandlerMap.Add(TEXT("moveWidget"),           [this](const TMap<FString, FString>&, const FString& B) { return HandleMoveWidget(B); });
+	HandlerMap.Add(TEXT("createWidgetBlueprint"),[this](const TMap<FString, FString>&, const FString& B) { return HandleCreateWidgetBlueprint(B); });
 }
 
 // ============================================================
