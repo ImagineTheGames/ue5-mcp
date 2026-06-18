@@ -50,10 +50,8 @@ bool FBlueprintMCPServer::SaveLevelPackage(ULevel* Level)
 
 	UE_LOG(LogTemp, Display, TEXT("BlueprintMCP: SaveLevelPackage — saving '%s'"), *PackageFilename);
 
-	if (FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*PackageFilename))
-	{
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*PackageFilename, false);
-	}
+	// Source-control checkout (or read-only clear when no provider is active).
+	EnsureWritableForSave(PackageFilename);
 
 	FSavePackageArgs SaveArgs;
 	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;

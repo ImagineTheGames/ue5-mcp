@@ -406,6 +406,16 @@ private:
 	TSharedPtr<FJsonObject> ParseBodyJson(const FString& Body);
 	FString MakeErrorJson(const FString& Message);
 	bool SaveBlueprintPackage(UBlueprint* BP);
+	/**
+	 * Make a package file writable prior to UPackage::Save.
+	 * If source control is enabled and available, performs a real checkout
+	 * (e.g. `p4 edit`) so the edit is tracked in the provider's opened-files
+	 * list. Only when no source-control provider is active does it fall back
+	 * to clearing the OS read-only bit. When a provider IS active but checkout
+	 * fails, it deliberately does NOT bypass — the save is allowed to fail so
+	 * the file is never silently modified outside source control.
+	 */
+	void EnsureWritableForSave(const FString& PackageFilename);
 	static FString UrlDecode(const FString& EncodedString);
 
 	// ----- Level / actor helpers (BlueprintMCPHandlers_Level.cpp) -----

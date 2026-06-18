@@ -35,7 +35,8 @@ public class BlueprintMCP : ModuleRules
 			"UMG",
 			"UMGEditor",
 			"SlateCore",
-			"HairStrandsCore"
+			"HairStrandsCore",
+			"SourceControl"
 		});
 	}
 }

@@ -36,6 +36,9 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "UObject/SavePackage.h"
+#include "ISourceControlModule.h"
+#include "ISourceControlProvider.h"
+#include "SourceControlHelpers.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -1183,6 +1186,51 @@ FString FBlueprintMCPServer::HandleRescan()
 }
 
 // ============================================================
+// EnsureWritableForSave
+// ============================================================
+
+void FBlueprintMCPServer::EnsureWritableForSave(const FString& PackageFilename)
+{
+	// Prefer a real source-control checkout so the edit is tracked in the
+	// provider's opened-files list (e.g. `p4 edit`) and can be submitted.
+	if (ISourceControlModule::Get().IsEnabled())
+	{
+		ISourceControlProvider& Provider = ISourceControlModule::Get().GetProvider();
+		if (Provider.IsAvailable())
+		{
+			if (USourceControlHelpers::CheckOutOrAddFile(PackageFilename))
+			{
+				UE_LOG(LogTemp, Display, TEXT("BlueprintMCP:   Checked out via source control: %s"), *PackageFilename);
+			}
+			else
+			{
+				// A provider IS active but checkout failed (e.g. exclusive lock,
+				// server unreachable). Do NOT clear the read-only bit — silently
+				// writing would bypass source control and orphan the change.
+				// Let the subsequent save fail loudly instead.
+				UE_LOG(LogTemp, Warning,
+					TEXT("BlueprintMCP:   Source-control checkout FAILED for %s (%s). Not bypassing read-only; save may fail. Check the file out manually."),
+					*PackageFilename, *USourceControlHelpers::LastErrorMsg().ToString());
+			}
+			return;
+		}
+
+		UE_LOG(LogTemp, Warning,
+			TEXT("BlueprintMCP:   Source control enabled but provider unavailable for %s; falling back to read-only clear."),
+			*PackageFilename);
+	}
+
+	// No active source-control provider (other projects, headless commandlet):
+	// fall back to clearing the OS read-only bit so the package write proceeds.
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (PlatformFile.IsReadOnly(*PackageFilename))
+	{
+		UE_LOG(LogTemp, Display, TEXT("BlueprintMCP:   Clearing read-only attribute (no source control) on %s"), *PackageFilename);
+		PlatformFile.SetReadOnly(*PackageFilename, false);
+	}
+}
+
+// ============================================================
 // SaveBlueprintPackage
 // ============================================================
 
@@ -1240,12 +1288,9 @@ bool FBlueprintMCPServer::SaveBlueprintPackage(UBlueprint* BP)
 		BP->Status = BS_UpToDate;
 	}
 
-	// 4. Clear read-only attribute if present (source control or LFS may set this)
-	if (FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*PackageFilename))
-	{
-		UE_LOG(LogTemp, Display, TEXT("BlueprintMCP:   Clearing read-only attribute on %s"), *PackageFilename);
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*PackageFilename, false);
-	}
+	// 4. Ensure the package file is writable — via source-control checkout when
+	//    a provider is active, otherwise by clearing the read-only bit.
+	EnsureWritableForSave(PackageFilename);
 
 	// 5. Phase 3: Save with SAVE_NoError + SEH protection
 	FSavePackageArgs SaveArgs;
@@ -2026,10 +2071,8 @@ bool FBlueprintMCPServer::SaveGenericPackage(UObject* Asset)
 		Package->GetName(), FPackageName::GetAssetPackageExtension());
 	PackageFilename = FPaths::ConvertRelativePathToFull(PackageFilename);
 
-	if (FPlatformFileManager::Get().GetPlatformFile().IsReadOnly(*PackageFilename))
-	{
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*PackageFilename, false);
-	}
+	// Source-control checkout (or read-only clear when no provider is active).
+	EnsureWritableForSave(PackageFilename);
 
 	FSavePackageArgs SaveArgs;
 	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
